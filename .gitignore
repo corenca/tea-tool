@@ -1,0 +1,24 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+**/target/
+.idea/
+.git/
+dist/
+.vscode/
+.DS_Store
+log/
+data/
+**/migrations/**
+!**/migrations/__init__.py
+.ruff_cache/
+.jbeval/
+.codegraph/
+.pytest_cache/
