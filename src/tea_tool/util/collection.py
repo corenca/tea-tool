@@ -1,7 +1,4 @@
-import logging
 from collections.abc import Iterable, Iterator
-
-logger = logging.getLogger(__name__)
 
 
 def chunked[T](iterable: Iterable[T], size: int) -> Iterator[list[T]]:
