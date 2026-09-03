@@ -17,24 +17,36 @@ from pathlib import Path
 import polars as pl
 
 
-def _validate_columns_dtypes(
-    columns: list[str], dtypes: dict[str, pl.DataType] | None
-) -> None:
-    """校验 columns 无重复且 dtypes 的键都包含在 columns 中。
+def _normalize_columns(
+    columns: list[str] | dict[str, str], has_header: bool
+) -> list[tuple[str, str]]:
+    """将 columns 的两种形态统一为 (内存列名, 文件表头名) 有序对。
+
+    list 形态表示内存列名与文件表头同名；dict 形态的键为加载后的内存列名、
+    值为文件表头名（仅在有表头文件上可用），输出按字典顺序。
 
     Args:
-        columns: 期望输出的列名列表。
-        dtypes: 按列声明的类型映射。
+        columns: 列名列表，或内存列名到文件表头名的映射。
+        has_header: 文件首行是否为表头。
+
+    Returns:
+        (内存列名, 文件表头名) 有序对列表。
 
     Raises:
-        ValueError: columns 含重复列名或 dtypes 含未声明列时。
+        ValueError: list 含重复列名、dict 将多个列名映射到同一表头、dict 用于
+            无表头文件时。
     """
+    if isinstance(columns, dict):
+        if not has_header:
+            raise ValueError("has_header=False 时 columns 必须为列名列表")
+        headers = list(columns.values())
+        if len(set(headers)) != len(headers):
+            duplicated = sorted({h for h in headers if headers.count(h) > 1})
+            raise ValueError(f"columns 不能将多个列名映射到同一文件表头: {duplicated}")
+        return list(columns.items())
     if len(set(columns)) != len(columns):
         raise ValueError("columns 不能包含重复列名")
-    if dtypes is not None:
-        extra = sorted(set(dtypes) - set(columns))
-        if extra:
-            raise ValueError(f"dtypes 包含未声明的列: {extra}")
+    return [(name, name) for name in columns]
 
 
 def _ensure_installed(*packages: str) -> None:
@@ -56,7 +68,7 @@ def _ensure_installed(*packages: str) -> None:
 
 def excel_to_df(
     path: str | Path,
-    columns: list[str],
+    columns: list[str] | dict[str, str],
     *,
     dtypes: dict[str, pl.DataType] | None = None,
     sheet_name: str | None = None,
@@ -68,10 +80,12 @@ def excel_to_df(
 
     Args:
         path: Excel 文件路径。
-        columns: 期望输出的列名列表，输出列按此顺序排列；has_header 为 False
-            时直接作为数据列名。
-        dtypes: 可选，按列名声明列类型，未声明的列由引擎推断；键必须都包含
-            在 columns 中。
+        columns: 列名列表或映射，输出列按此顺序排列。列表形态要求列名与文件
+            表头同名；映射形态的键为加载后的内存列名、值为文件表头名（如
+            {"id": "编号"}），仅用于有表头文件。has_header 为 False 时列表形态
+            直接作为数据列名。
+        dtypes: 可选，按内存列名声明列类型，未声明的列由引擎推断；键必须都
+            包含在 columns 中。
         sheet_name: 可选，工作表名；为 None 时读取第一个工作表。
         has_header: 首行是否为表头。True 时首行作为列名并用于匹配 columns，
             表头中未声明的多余列会被忽略；False 时首行即数据。
@@ -82,24 +96,35 @@ def excel_to_df(
     Raises:
         ImportError: 缺少 fastexcel 依赖时。
         ValueError: 表头缺少声明的列、无表头时文件列数与声明列数不一致、columns
-            含重复列名、dtypes 包含未声明的列时。
+            含重复列名或映射异常、dtypes 包含未声明的列时。
     """
     _ensure_installed("fastexcel")
-    _validate_columns_dtypes(columns, dtypes)
-    kwargs: dict[str, object] = {"has_header": has_header}
+    pairs = _normalize_columns(columns, has_header)
+    names = [memory for memory, _ in pairs]
     if dtypes is not None:
-        kwargs["schema_overrides"] = dtypes
-    if sheet_name is not None:
-        kwargs["sheet_name"] = sheet_name
-    df = pl.read_excel(path, **kwargs)
+        extra = sorted(set(dtypes) - set(names))
+        if extra:
+            raise ValueError(f"dtypes 包含未声明的列: {extra}")
 
     if has_header:
-        missing = [c for c in columns if c not in df.columns]
+        # 读取时按文件表头名声明类型覆盖，输出时再改为内存列名。
+        header_of = dict(pairs)
+        kwargs: dict[str, object] = {"has_header": True}
+        if dtypes is not None:
+            kwargs["schema_overrides"] = {
+                header_of[name]: dtype for name, dtype in dtypes.items()
+            }
+        if sheet_name is not None:
+            kwargs["sheet_name"] = sheet_name
+        df = pl.read_excel(path, **kwargs)
+        missing = [header for _, header in pairs if header not in df.columns]
         if missing:
             raise ValueError(f"表头缺少声明列: {missing}")
-        return df.select(columns)
+        # 按声明顺序选择并按需改名；列表形态改名与原列名相同，结果不变。
+        return df.select([pl.col(header).alias(memory) for memory, header in pairs])
 
-    # 无表头：确认宽度后赋列名，再按需转换类型。
+    # 无表头：columns 已保证为列表形态，确认宽度后赋列名，再按需转换类型。
+    df = pl.read_excel(path, has_header=False, sheet_name=sheet_name)
     if len(df.columns) != len(columns):
         raise ValueError(f"文件列数({len(df.columns)})与声明列数({len(columns)})不一致")
     df.columns = columns

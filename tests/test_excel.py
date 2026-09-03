@@ -149,6 +149,62 @@ def test_excel_to_df_sheet_name_not_found_raises(tmp_path: Path) -> None:
         excel_to_df(path, columns=["id"], sheet_name="nope")
 
 
+def test_excel_to_df_columns_mapping_renames(tmp_path: Path) -> None:
+    """dict 形态 columns：键为加载后列名，值为文件表头名。"""
+    path = tmp_path / "book.xlsx"
+    _make_xlsx(path, {"数据": [["编号", "客户名称"], [1, "甲"], [2, "乙"]]})
+    df = excel_to_df(path, columns={"id": "编号", "name": "客户名称"})
+    assert df.columns == ["id", "name"]
+    assert df.to_dict(as_series=False) == {"id": [1, 2], "name": ["甲", "乙"]}
+
+
+def test_excel_to_df_columns_mapping_order_and_subset(tmp_path: Path) -> None:
+    """dict 映射输出按声明顺序，未声明表头列被忽略。"""
+    path = tmp_path / "book.xlsx"
+    _make_xlsx(path, {"数据": [["甲", "乙", "丙"], [1, 2, 3]]})
+    df = excel_to_df(path, columns={"c": "丙", "a": "甲"})
+    assert df.columns == ["c", "a"]
+    assert df.to_dict(as_series=False) == {"c": [3], "a": [1]}
+
+
+def test_excel_to_df_columns_mapping_missing_header_raises(
+    tmp_path: Path,
+) -> None:
+    """dict 映射指向不存在的表头时抛出 ValueError。"""
+    path = tmp_path / "book.xlsx"
+    _make_xlsx(path, {"数据": [["编号"], [1]]})
+    with pytest.raises(ValueError, match="表头缺少声明列: \\['不存在'\\]"):
+        excel_to_df(path, columns={"id": "不存在"})
+
+
+def test_excel_to_df_columns_mapping_duplicate_header_raises(
+    tmp_path: Path,
+) -> None:
+    """多个内存列名映射到同一文件表头时抛出 ValueError。"""
+    path = tmp_path / "book.xlsx"
+    _make_xlsx(path, {"数据": [["编号"], [1]]})
+    with pytest.raises(ValueError, match="同一文件表头"):
+        excel_to_df(path, columns={"id": "编号", "code": "编号"})
+
+
+def test_excel_to_df_columns_mapping_without_header_raises(
+    tmp_path: Path,
+) -> None:
+    """无表头场景不支持 dict 映射，抛出 ValueError。"""
+    path = tmp_path / "book.xlsx"
+    _make_xlsx(path, {"数据": [[1, 2]]})
+    with pytest.raises(ValueError, match="列名列表"):
+        excel_to_df(path, columns={"id": "编号"}, has_header=False)
+
+
+def test_excel_to_df_columns_mapping_dtypes(tmp_path: Path) -> None:
+    """dict 映射下 dtypes 的键使用加载后的内存列名。"""
+    path = tmp_path / "book.xlsx"
+    _make_xlsx(path, {"数据": [["编号"], [1]]})
+    df = excel_to_df(path, columns={"id": "编号"}, dtypes={"id": pl.String})
+    assert df.schema == {"id": pl.String}
+
+
 def test_excel_to_df_missing_fastexcel_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
