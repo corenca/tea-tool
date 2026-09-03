@@ -1,4 +1,8 @@
-"""读取 CSV 文件为 polars DataFrame 的工具。"""
+"""CSV 相关的通用工具模块。
+
+当前提供 CSV 文件与 polars DataFrame 之间的读写转换（csv_to_df、df_to_csv），
+后续其他 CSV 处理方法将持续补充于此。
+"""
 
 import io
 from pathlib import Path
@@ -87,7 +91,7 @@ def _pick_sentinel(text: str) -> str:
     raise ValueError("文本包含全部 ASCII 控制字符，无法确定替换哨兵")
 
 
-def read_csv(
+def csv_to_df(
     path: str | Path,
     columns: list[str],
     *,
@@ -164,3 +168,66 @@ def read_csv(
             [pl.col(name).cast(dtype) for name, dtype in dtypes.items()]
         )
     return df
+
+
+def _quote_field(value: str, sep: str) -> str:
+    """按 RFC 4180 决定字段是否需要引号包裹并返回序列化结果。
+
+    空字符串或含分隔符、双引号、换行的字段必须用双引号包裹，字段内的双引号
+    以 ``""`` 转义；null 不经过本函数，由调用方直接输出为空字段。
+
+    Args:
+        value: 字段文本（空字符串表示空串而非 null）。
+        sep: 字段分隔符。
+
+    Returns:
+        可直接写入 CSV 的字段文本。
+    """
+    if value == "" or sep in value or '"' in value or "\n" in value or "\r" in value:
+        return '"' + value.replace('"', '""') + '"'
+    return value
+
+
+def df_to_csv(
+    df: pl.DataFrame,
+    path: str | Path,
+    sep: str,
+    *,
+    has_header: bool = True,
+    trailing_sep: bool = False,
+) -> None:
+    """将 polars DataFrame 写出为 CSV 文件。
+
+    单字符分隔符且无行尾分隔符时走 polars 原生写出；多字符分隔符或行尾带
+    多余分隔符时改为内部序列化（各列转字符串后按 RFC 4180 包裹需保护的字段），
+    保证与 csv_to_df 的读回逻辑对称。null 写为空字段，空字符串写为 ``""``。
+
+    Args:
+        df: 待写出的 DataFrame，按现有列顺序写出全部列。
+        path: 输出文件路径。
+        sep: 字段分隔符，必填，支持任意长度字符串。
+        has_header: 是否写表头行，默认 True；表头行同样按字段规则处理列名。
+        trailing_sep: 每行末尾（含表头行）是否带一个多余分隔符，默认 False。
+
+    Raises:
+        ValueError: sep 为空字符串时。
+    """
+    if not sep:
+        raise ValueError("sep 不能为空字符串")
+    if len(sep) == 1 and not trailing_sep:
+        df.write_csv(path, separator=sep, include_header=has_header)
+        return
+
+    # 各列统一转为字符串，保留 polars 的标准字段表示，再逐行拼接。
+    text = df.select([pl.col(col).cast(pl.String) for col in df.columns])
+    lines: list[str] = []
+    if has_header:
+        header = sep.join(_quote_field(col, sep) for col in df.columns)
+        lines.append(header + sep if trailing_sep else header)
+    for row in text.iter_rows():
+        fields = sep.join("" if v is None else _quote_field(v, sep) for v in row)
+        lines.append(fields + sep if trailing_sep else fields)
+    content = "\n".join(lines)
+    if lines:
+        content += "\n"
+    Path(path).write_text(content, encoding="utf-8", newline="")
