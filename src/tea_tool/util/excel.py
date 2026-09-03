@@ -1,14 +1,20 @@
 """Excel 相关的通用工具模块。
 
 当前提供 .xlsx 文件与 polars DataFrame 之间的读写转换（excel_to_df、df_to_excel），
-后续其他 Excel 处理方法将持续补充于此。依赖 fastexcel（读取引擎）与
-xlsxwriter（写出引擎），随 ``excel`` 可选依赖安装。
+后续其他 Excel 处理方法将持续补充于此。
+
+依赖：fastexcel（读取引擎）与 xlsxwriter（写出引擎），需安装 excel 可选依赖：
+
+- pip: pip install 'tea-tool[excel]'
+- uv: uv add 'tea-tool[excel]'
+
+缺失依赖时调用对应功能会抛出带安装指引的 ImportError。
 """
 
+import importlib.util
 from pathlib import Path
 
 import polars as pl
-from xlsxwriter.exceptions import InvalidWorksheetName
 
 
 def _validate_columns_dtypes(
@@ -29,6 +35,23 @@ def _validate_columns_dtypes(
         extra = sorted(set(dtypes) - set(columns))
         if extra:
             raise ValueError(f"dtypes 包含未声明的列: {extra}")
+
+
+def _ensure_installed(*packages: str) -> None:
+    """确认 excel 可选依赖已安装，缺失时抛出带安装指引的 ImportError。
+
+    Args:
+        packages: 需要确认已安装的依赖包名。
+
+    Raises:
+        ImportError: 任一依赖包缺失时，提示安装 tea-tool[excel]。
+    """
+    missing = [p for p in packages if importlib.util.find_spec(p) is None]
+    if missing:
+        raise ImportError(
+            f"使用该功能需要安装 excel 可选依赖（缺少 {', '.join(missing)}），"
+            "安装方式：pip install 'tea-tool[excel]' 或 uv add 'tea-tool[excel]'"
+        )
 
 
 def excel_to_df(
@@ -57,9 +80,11 @@ def excel_to_df(
         按 columns 顺序包含声明列的 DataFrame。
 
     Raises:
+        ImportError: 缺少 fastexcel 依赖时。
         ValueError: 表头缺少声明的列、无表头时文件列数与声明列数不一致、columns
             含重复列名、dtypes 包含未声明的列时。
     """
+    _ensure_installed("fastexcel")
     _validate_columns_dtypes(columns, dtypes)
     kwargs: dict[str, object] = {"has_header": has_header}
     if dtypes is not None:
@@ -103,8 +128,12 @@ def df_to_excel(
         sheet_name: 工作表名，默认 "Sheet1"。
 
     Raises:
+        ImportError: 缺少 xlsxwriter 依赖时。
         ValueError: sheet_name 包含 Excel 非法字符（[]:*?/\\）时。
     """
+    _ensure_installed("xlsxwriter")
+    from xlsxwriter.exceptions import InvalidWorksheetName
+
     try:
         df.write_excel(path, worksheet=sheet_name)
     except InvalidWorksheetName as exc:

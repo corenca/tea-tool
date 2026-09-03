@@ -149,6 +149,30 @@ def test_excel_to_df_sheet_name_not_found_raises(tmp_path: Path) -> None:
         excel_to_df(path, columns=["id"], sheet_name="nope")
 
 
+def test_excel_to_df_missing_fastexcel_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """缺少 fastexcel 时抛出带安装指引的 ImportError。"""
+    path = tmp_path / "book.xlsx"
+    _make_xlsx(path, {"数据": [["id"], [1]]})
+    monkeypatch.setattr(
+        "tea_tool.util.excel.importlib.util.find_spec", lambda name: None
+    )
+    with pytest.raises(ImportError, match="tea-tool\\[excel\\]"):
+        excel_to_df(path, columns=["id"])
+
+
+def test_df_to_excel_missing_xlsxwriter_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """缺少 xlsxwriter 时抛出带安装指引的 ImportError。"""
+    monkeypatch.setattr(
+        "tea_tool.util.excel.importlib.util.find_spec", lambda name: None
+    )
+    with pytest.raises(ImportError, match="tea-tool\\[excel\\]"):
+        df_to_excel(pl.DataFrame({"a": [1]}), tmp_path / "out.xlsx")
+
+
 def test_df_to_excel_invalid_sheet_name_raises(tmp_path: Path) -> None:
     """工作表名含 Excel 非法字符时抛出 ValueError。"""
     df = pl.DataFrame({"a": [1]})
