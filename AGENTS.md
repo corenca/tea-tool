@@ -27,3 +27,4 @@ Python 工具库（"Python tool box"，v0.1.0）。由 uv 管理，src 布局，
 3. **只提交自己的改动**：本仓库工作区常混有他人未提交的修改（依赖升级、脚手架等）。提交前用 `git status`/`git diff` 核对，只 `git add` 白名单自己的文件，勿连带他人改动一起提交
 4. **提交前先检查与格式化**：每次 git 提交前必须执行 `uv run ruff check`、`uv run ruff format --check`（若有格式差异先 `ruff format`）与 `uv run pytest`，全部通过后再提交
 5. `**/migrations/**` 被 .gitignore 忽略（保留 `__init__.py`）——Django 迁移文件默认不入库，后续添加 Django 应用时注意
+6. **检查无用依赖**：提交前留意是否残留或引入不再使用的第三方依赖与无用导入（模块级 import、logger 等），无用者应移除——依赖用 `uv remove` 管理，代码内无用导入直接清理
