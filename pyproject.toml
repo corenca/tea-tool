@@ -1,8 +1,9 @@
 [project]
 name = "tea-tool"
 version = "0.1.0"
-description = "Python tool box"
+license = {file = "LICENSE"}
 readme = "README.md"
+description = "Commonly used Python development toolkits in business development."
 authors = [
     { name = "Corenca", email = "corenca.wang@gmail.com" }
 ]
