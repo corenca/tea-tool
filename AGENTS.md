@@ -28,3 +28,4 @@ Python 工具库（"Python tool box"，v0.1.0）。由 uv 管理，src 布局，
 4. **提交前先检查与格式化**：每次 git 提交前必须执行 `uv run ruff check`、`uv run ruff format --check`（若有格式差异先 `ruff format`）与 `uv run pytest`，全部通过后再提交
 5. `**/migrations/**` 被 .gitignore 忽略（保留 `__init__.py`）——Django 迁移文件默认不入库，后续添加 Django 应用时注意
 6. **检查无用依赖**：提交前留意是否残留或引入不再使用的第三方依赖与无用导入（模块级 import、logger 等），无用者应移除——依赖用 `uv remove` 管理，代码内无用导入直接清理
+7. **函数命名动词体系**：公共函数命名带动作提示词，见名知意——`get_` 取单值/时段边界（如 `get_month_start`）、`list_` 取序列（如 `list_days`）、`query` 表示检索，状态变更类用 `add`/`update`/`remove`；`parse` 等动词自足的不加前缀。命名在简洁的同时保证语义可推断
