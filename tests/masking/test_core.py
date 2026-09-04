@@ -75,9 +75,15 @@ def test_mask_text_masks_email(cn_masker: Masker) -> None:
 
 
 def test_mask_text_masks_bank_card(cn_masker: Masker) -> None:
-    """16 位纯数字被银行卡规则整段掩码。"""
-    card = "6222020200112233"
+    """通过 Luhn 校验的 16 位测试卡号被银行卡规则整段掩码。"""
+    card = "4111111111111111"
     assert cn_masker.mask_text("卡号 " + card) == "卡号 " + _stars(card)
+
+
+def test_mask_text_ignores_non_luhn_digits(cn_masker: Masker) -> None:
+    """形似卡号的纯数字串未通过 Luhn 确认时不被银行卡规则掩码。"""
+    digits = "4111111111111112"  # 测试卡号改末位，校验和破坏
+    assert cn_masker.mask_text("数字 " + digits) == "数字 " + digits
 
 
 def test_mask_text_masks_ip(cn_masker: Masker) -> None:
@@ -189,7 +195,7 @@ def test_mask_text_multiple_hits_same_text(cn_masker: Masker) -> None:
 def test_mask_text_shrinking_replacement_keeps_positions() -> None:
     """替换串短于原文（Remove）时，其余命中位置不受位移影响。"""
     phone_rule = MaskRule(
-        pattern=r"1[3-9]\d{9}",
+        matcher=r"1[3-9]\d{9}",
         strategy=RemoveStrategy(),
         priority=100,
     )
@@ -202,7 +208,7 @@ def test_mask_text_shrinking_replacement_keeps_positions() -> None:
 def test_mask_text_growing_replacement_keeps_positions() -> None:
     """替换串长于原文（Replace 定长串）时，其余命中位置不受位移影响。"""
     phone_rule = MaskRule(
-        pattern=r"1[3-9]\d{9}",
+        matcher=r"1[3-9]\d{9}",
         strategy=ReplaceStrategy("[号码]"),
         priority=100,
     )
@@ -263,7 +269,7 @@ def test_mask_text_custom_strategy_applies() -> None:
         def mask(self, value: str) -> str:
             return value.upper()
 
-    rule = MaskRule(pattern=r"[a-z]{3}", strategy=UpperStrategy())
+    rule = MaskRule(matcher=r"[a-z]{3}", strategy=UpperStrategy())
     assert Masker(rules=[rule]).mask_text("编码 abc 结尾") == "编码 ABC 结尾"
 
 

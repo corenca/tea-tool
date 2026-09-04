@@ -1,20 +1,22 @@
 """文本发现层：规则在自由文本中定位敏感片段。
 
-MaskRule 将"识别（正则）"与"处理（策略）"绑定为一条完整规则：发现敏感
-片段的同时决定其脱敏方式。MaskMatch 是规则的一次命中结果，平铺携带处理
-所需信息（策略与优先级），供编排层做重叠消解后替换。两者为单向依赖
-（MaskRule → MaskMatch），因此本模块无需延迟注解求值。
+MaskRule 将"识别（matcher）"与"处理（策略）"绑定为一条完整规则：识别器
+（Matcher，见 matchers 模块）定位候选区间并确认其真实命中，同时决定脱敏
+方式。MaskMatch 是规则的一次命中结果，平铺携带处理所需信息（策略与优先
+级），供编排层做重叠消解后替换。依赖方向（MaskRule → MaskMatch、
+MaskRule → Matcher）均为单向，因此本模块无需延迟注解求值。
 
 模型直接继承 pydantic.BaseModel（不经过 tea_tool.schema.BaseModel）：规则
 值对象需要的是"不可变 + 拒绝未声明字段"而非 ORM 数据模型的宽松配置——
 规则字段拼错应显式报错，避免脱敏静默失效。
 """
 
-import re
 from re import Pattern
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from .matchers import Matcher, RegexMatcher
 from .strategies import MaskStrategy
 
 
@@ -52,61 +54,69 @@ class MaskMatch(_MaskModel):
 
 
 class MaskRule(_MaskModel):
-    """文本脱敏规则：正则定位 + 策略处理。
+    """文本脱敏规则：识别器定位 + 策略处理。
 
     Attributes:
-        pattern: 定位敏感片段的匹配模式，可为正则字符串或预编译 Pattern。
+        matcher: 定位并确认敏感片段的识别器，可为 Matcher 实例，或正则
+            表达式（字符串/预编译 Pattern——构造期自动包装为
+            RegexMatcher，见 _coerce_matcher）。
         strategy: 命中片段采用的脱敏策略。
         priority: 与其他规则区间重叠时的优先级，数值大者优先，默认 0。
     """
 
-    pattern: str | Pattern[str]
+    matcher: Matcher
     strategy: MaskStrategy
     priority: int = 0
 
-    @field_validator("pattern")
+    @field_validator("matcher", mode="before")
     @classmethod
-    def _pattern_not_empty(
-        cls,
-        pattern: str | Pattern[str],
-    ) -> str | Pattern[str]:
-        """拒绝空正则：其只能零宽命中（会被 find 忽略），属配置错误，构造期尽早暴露。
+    def _coerce_matcher(cls, matcher: object) -> Matcher:
+        """把正则表达式包装为正则识别器，识别器子类原样通过。
+
+        便捷入口：matcher 直接传正则字符串或预编译 Pattern 时，构造期即
+        包装为 RegexMatcher；空正则在 RegexMatcher 构造期被拒绝（零宽命
+        中无定位能力），配置错误尽早暴露。Matcher 的非正则实现（如带
+        Luhn 确认的银行卡识别器）由使用方显式传入实例。
 
         Args:
-            pattern: 构造传入的匹配模式。
+            matcher: 构造传入的识别器或正则表达式。
 
         Returns:
-            原样返回非空模式。
+            可用的 Matcher 实例。
 
         Raises:
-            ValueError: pattern 为空字符串。
+            ValueError: matcher 既非 Matcher 实例亦非正则表达式。
         """
-        if isinstance(pattern, str) and not pattern:
-            raise ValueError("pattern 不能为空字符串")
-        return pattern
+        if isinstance(matcher, (str, Pattern)):
+            return RegexMatcher(matcher)
+        if isinstance(matcher, Matcher):
+            return matcher
+        raise ValueError("matcher 必须是 Matcher 实例或正则表达式")
 
     def find(self, text: str) -> list[MaskMatch]:
         """在文本中查找本规则的全部命中。
 
-        零宽命中（start == end，如可空匹配的正则产生）不构成可替换片段，
-        一律忽略。
+        候选区间由 matcher 定位并经其确认（accepts）——Luhn 等真实性
+        校验在识别器内部完成；确认通过的候选按出现顺序组装为本规则的
+        命中。matcher 契约保证候选非零宽（start < end），不构成可替换
+        片段的零宽区间由识别器实现自行忽略。
 
         Args:
             text: 待扫描文本。
 
         Returns:
-            按出现顺序排列的非零宽命中列表；无命中时为空列表。
+            按出现顺序排列的命中列表；无命中时为空列表。
         """
         return [
             MaskMatch(
                 strategy=self.strategy,
                 priority=self.priority,
-                start=m.start(),
-                end=m.end(),
-                value=m.group(),
+                start=match.start,
+                end=match.end,
+                value=match.value,
             )
-            for m in re.compile(self.pattern).finditer(text)
-            if m.end() > m.start()
+            for match in self.matcher.find(text)
+            if self.matcher.accepts(match)
         ]
 
     def with_strategy(
@@ -114,8 +124,7 @@ class MaskRule(_MaskModel):
         strategy: MaskStrategy,
         *,
         priority: int | None = None,
-    ) -> "MaskRule":
-        # 返回注解字符串化：类体执行期类名尚未绑定（未启用注解延迟求值）
+    ) -> Self:
         """派生新规则：替换脱敏策略，可一并显式指定新优先级。
 
         原规则不可变且不受影响，已注入 Masker 的规则不会被派生改写；
@@ -128,7 +137,7 @@ class MaskRule(_MaskModel):
             priority: 新规则的优先级；None（默认）时沿用原规则的值。
 
         Returns:
-            携带新策略、其余字段与原规则一致的新规则实例。
+            携带新策略、其余字段（matcher 与优先级）与原规则一致的新规则实例。
         """
         update: dict[str, object] = {"strategy": strategy}
         if priority is not None:
