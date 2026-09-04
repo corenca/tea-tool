@@ -1,30 +1,16 @@
-# ruff: noqa: DTZ001, DTZ005, DTZ007
-# 本文件大量刻意构造 naive 时间，用于覆盖日历域（date/datetime 双态）与无时区字符串解析行为。
-"""tea_tool.datetime 时间工具包的单元测试。"""
+# ruff: noqa: DTZ001
+"""tea_tool.datetime.util 日历域日期工具函数的单元测试。"""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 import pytest
 
 from tea_tool.datetime.formatter import (
     DATE_TIME_FORMAT,
-    DATE_TIME_FORMAT_CN,
-    DATE_TIME_ISO,
     DATE_TIME_ISO_ZONE,
     DATE_TIME_MICROSECOND,
-    DATE_TIME_ZONE,
-    MONTH_FORMAT,
-    TIME_FORMAT_MINUTE,
-    YEAR_TO_MICROSECOND,
 )
-from tea_tool.datetime.timezone import (
-    LOS_ANGELES,
-    NEW_YORK,
-    SHANGHAI,
-    SYDNEY,
-    UTC,
-    local_tz,
-)
+from tea_tool.datetime.timezone import NEW_YORK, SHANGHAI, UTC, local_tz
 from tea_tool.datetime.util import (
     get_day_range,
     get_day_start,
@@ -36,79 +22,6 @@ from tea_tool.datetime.util import (
     list_days,
     parse_datetime,
 )
-
-
-class TestTimezone:
-    """timezone 时区常量与本地时区获取。"""
-
-    def test_zoneinfo_keys(self) -> None:
-        """常量指向预期 IANA 时区。"""
-        assert UTC.key == "UTC"
-        assert SHANGHAI.key == "Asia/Shanghai"
-        assert NEW_YORK.key == "America/New_York"
-        assert LOS_ANGELES.key == "America/Los_Angeles"
-        assert SYDNEY.key == "Australia/Sydney"
-
-    def test_constants_are_usable_as_tzinfo(self) -> None:
-        """常量可直接构造 aware datetime 并给出正确偏移。"""
-        assert datetime(2026, 1, 1, tzinfo=SHANGHAI).utcoffset() == timedelta(hours=8)
-        # 纽约 1 月为冬令时（UTC-5）。
-        assert datetime(2026, 1, 1, tzinfo=NEW_YORK).utcoffset() == timedelta(hours=-5)
-
-    def test_local_tz_matches_astimezone(self) -> None:
-        """local_tz 与 astimezone 无参结果的时区偏移一致。"""
-        now = datetime.now()
-        assert local_tz().utcoffset(now) == now.astimezone().utcoffset()
-
-
-class TestFormatter:
-    """formatter 格式化模板常量。"""
-
-    def test_microsecond_templates_roundtrip(self) -> None:
-        """微秒模板与 datetime 互转保持精度。"""
-        value = datetime(2026, 1, 2, 3, 4, 5, 678901)
-        assert (
-            datetime.strptime(
-                value.strftime(DATE_TIME_MICROSECOND), DATE_TIME_MICROSECOND
-            )
-            == value
-        )
-        assert (
-            datetime.strptime(value.strftime(YEAR_TO_MICROSECOND), YEAR_TO_MICROSECOND)
-            == value
-        )
-
-    def test_zone_template_carries_utc_offset(self) -> None:
-        """ZONE 模板可 strftime/strptime 携带 +0800 偏移。"""
-        value = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone(timedelta(hours=8)))
-        text = value.strftime(DATE_TIME_ZONE)
-        parsed = datetime.strptime(text, DATE_TIME_ZONE)
-        assert parsed.utcoffset() == timedelta(hours=8)
-        assert parsed == value
-
-    def test_iso_templates(self) -> None:
-        """ISO 扩展 T 分隔模板按预期解析。"""
-        assert datetime.strptime("2026-01-02T03:04:05", DATE_TIME_ISO) == datetime(
-            2026, 1, 2, 3, 4, 5
-        )
-        parsed = datetime.strptime("2026-01-02T03:04:05+0800", DATE_TIME_ISO_ZONE)
-        assert parsed.utcoffset() == timedelta(hours=8)
-
-    def test_month_and_minute_templates(self) -> None:
-        """MONTH/TIME_FORMAT_MINUTE 模板值正确。"""
-        assert MONTH_FORMAT == "%Y-%m"
-        assert TIME_FORMAT_MINUTE == "%H:%M"
-        assert datetime(2026, 1, 1).strftime(MONTH_FORMAT) == "2026-01"
-        assert datetime(2026, 1, 1, 9, 30).strftime(TIME_FORMAT_MINUTE) == "09:30"
-
-    def test_chinese_template_roundtrip(self) -> None:
-        """中文模板可正常 strftime/strptime 往返。"""
-        value = datetime(2026, 1, 2, 3, 4, 5)
-        assert value.strftime(DATE_TIME_FORMAT_CN) == "2026年01月02日 03时04分05秒"
-        assert (
-            datetime.strptime("2026年01月02日 03时04分05秒", DATE_TIME_FORMAT_CN)
-            == value
-        )
 
 
 class TestMonthBoundary:

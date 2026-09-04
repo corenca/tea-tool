@@ -1,29 +1,18 @@
-"""tea_tool.masking 脱敏机制与预置规则的单元测试。"""
+"""tea_tool.masking.core Masker 脱敏入口的单元测试。"""
 
-import re
 from collections import namedtuple
 
 import pytest
-from pydantic import ValidationError
 
 from tea_tool.masking import (
-    HashStrategy,
     KeepStrategy,
     Masker,
-    MaskMatch,
     MaskRule,
     MaskStrategy,
     RemoveStrategy,
     ReplaceStrategy,
 )
-from tea_tool.masking.presets import (
-    BANK_CARD_RULE,
-    CN_PII_RULES,
-    EMAIL_RULE,
-    ID_CARD_RULE,
-    IP_RULE,
-    PHONE_RULE,
-)
+from tea_tool.masking.presets import CN_PII_RULES, PHONE_RULE
 
 # 各测试共用的典型策略：手机号保留 3+4。
 PHONE_MASK = KeepStrategy(prefix=3, suffix=4)
@@ -37,179 +26,6 @@ MASK_CHAR = "*"
 def _stars(text: str) -> str:
     """生成与 text 等长的掩码串。"""
     return MASK_CHAR * len(text)
-
-
-# ----------------------------------------------------------------------
-# 策略层：KeepStrategy
-# ----------------------------------------------------------------------
-
-
-def test_keep_strategy_default_masks_whole_value() -> None:
-    """无参构造时整段掩码（不保留首尾）。"""
-    assert KeepStrategy().mask("13812345678") == _stars("13812345678")
-
-
-def test_keep_strategy_keeps_prefix_and_suffix() -> None:
-    """保留首尾指定字符数，中间掩码。"""
-    assert PHONE_MASK.mask("13812345678") == "138****5678"
-
-
-def test_keep_strategy_keeps_prefix_only() -> None:
-    """suffix 为 0 时只保留前缀，末尾不残留。"""
-    assert KeepStrategy(prefix=3).mask("13812345678") == "138" + _stars("12345678")
-
-
-def test_keep_strategy_suffix_over_length_masks_all() -> None:
-    """保留位覆盖全长时退化为整体掩码，不产生保留区重叠。"""
-    assert KeepStrategy(prefix=6, suffix=6).mask("12345") == _stars("12345")
-
-
-def test_keep_strategy_custom_mask_char() -> None:
-    """支持自定义掩码字符。"""
-    assert KeepStrategy(mask_char="#").mask("abc") == "###"
-
-
-def test_keep_strategy_empty_value_unchanged() -> None:
-    """空字符串原样返回。"""
-    assert KeepStrategy().mask("") == ""
-    assert KeepStrategy(prefix=1, suffix=1).mask("") == ""
-
-
-@pytest.mark.parametrize("prefix", [-1, -10])
-def test_keep_strategy_negative_prefix_raises(prefix: int) -> None:
-    """负数 prefix 构造时抛 ValueError。"""
-    with pytest.raises(ValueError, match="非负"):
-        KeepStrategy(prefix=prefix)
-
-
-def test_keep_strategy_negative_suffix_raises() -> None:
-    """负数 suffix 构造时抛 ValueError。"""
-    with pytest.raises(ValueError, match="非负"):
-        KeepStrategy(suffix=-1)
-
-
-def test_keep_strategy_empty_mask_char_raises() -> None:
-    """空掩码字符构造时抛 ValueError。"""
-    with pytest.raises(ValueError, match="mask_char"):
-        KeepStrategy(mask_char="")
-
-
-# ----------------------------------------------------------------------
-# 策略层：ReplaceStrategy / HashStrategy / RemoveStrategy
-# ----------------------------------------------------------------------
-
-
-def test_replace_strategy_replaces_with_fixed_string() -> None:
-    """整体替换为构造时给定的固定字符串。"""
-    assert ReplaceStrategy("***").mask("13812345678") == "***"
-
-
-def test_replace_strategy_empty_replacement_raises() -> None:
-    """空替换串构造时抛 ValueError（整体删除应使用 RemoveStrategy）。"""
-    with pytest.raises(ValueError, match="replacement"):
-        ReplaceStrategy("")
-
-
-def test_hash_strategy_output_format() -> None:
-    """输出为 algorithm:hexdigest 形式，且结果确定可复现。"""
-    strategy = HashStrategy()
-    first = strategy.mask("13812345678")
-    assert first == strategy.mask("13812345678")
-    assert first.startswith("sha256:")
-    assert len(first) == len("sha256:") + 64
-
-
-def test_hash_strategy_known_digest() -> None:
-    """无盐 sha256 对已知输入输出固定摘要。"""
-    assert HashStrategy().mask("abc") == (
-        "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    )
-
-
-def test_hash_strategy_salt_changes_digest() -> None:
-    """不同盐产生不同摘要，同盐结果确定。"""
-    strategy = HashStrategy(salt="pepper")
-    assert strategy.mask("13812345678") != HashStrategy().mask("13812345678")
-    assert strategy.mask("13812345678") == strategy.mask("13812345678")
-
-
-def test_hash_strategy_unknown_algorithm_raises() -> None:
-    """构造时校验算法名，不支持时抛 ValueError。"""
-    with pytest.raises(ValueError, match="算法"):
-        HashStrategy(algorithm="not-a-real-algo")
-
-
-def test_hash_strategy_empty_algorithm_raises() -> None:
-    """空算法名构造时抛 ValueError。"""
-    with pytest.raises(ValueError, match="algorithm"):
-        HashStrategy(algorithm="")
-
-
-def test_remove_strategy_deletes_value() -> None:
-    """整体删除：恒返回空字符串。"""
-    assert RemoveStrategy().mask("13812345678") == ""
-
-
-# ----------------------------------------------------------------------
-# 规则层：MaskRule.find
-# ----------------------------------------------------------------------
-
-
-def test_mask_rule_find_hits() -> None:
-    """规则在文本中找出全部命中，携带区间、原文与所属规则的处理信息。"""
-    matches = PHONE_RULE.find("手机 13812345678 与 13912345678")
-    assert [m.value for m in matches] == ["13812345678", "13912345678"]
-    assert matches[0].start == 3
-    assert matches[0].end == 3 + 11
-    assert matches[0].strategy is PHONE_RULE.strategy
-    assert matches[0].priority == PHONE_RULE.priority
-
-
-def test_mask_rule_find_no_hit() -> None:
-    """无命中时返回空列表。"""
-    assert PHONE_RULE.find("这里没有手机号") == []
-
-
-def test_mask_rule_find_accepts_compiled_pattern() -> None:
-    """pattern 接受预编译的 re.Pattern。"""
-    rule = MaskRule(pattern=re.compile(r"\d+"), strategy=KeepStrategy())
-    assert [m.value for m in rule.find("ab12cd34")] == ["12", "34"]
-
-
-def test_mask_rule_find_ignores_zero_width() -> None:
-    """可零宽匹配的正则：零宽命中不构成可替换片段，find 时忽略。"""
-    rule = MaskRule(pattern=r"\d*", strategy=KeepStrategy())
-    assert [m.value for m in rule.find("ab12cd")] == ["12"]
-
-
-def test_mask_match_length() -> None:
-    """命中长度等于区间长度。"""
-    match = MaskMatch(
-        strategy=KeepStrategy(),
-        priority=1,
-        start=3,
-        end=14,
-        value="13812345678",
-    )
-    assert match.length == 11
-
-
-def test_mask_rule_is_immutable() -> None:
-    """规则模型为 frozen 配置，字段不可修改。"""
-    with pytest.raises(ValidationError):
-        PHONE_RULE.priority = 999
-
-
-def test_mask_rule_empty_pattern_raises() -> None:
-    """空正则构造时拒绝，避免零宽命中污染脱敏结果。"""
-    with pytest.raises(ValidationError, match="pattern"):
-        MaskRule(pattern="", strategy=KeepStrategy())
-
-
-def test_mask_rule_unknown_field_raises() -> None:
-    """拼错字段名时显式报错，配置不静默丢失。"""
-    with pytest.raises(ValidationError):
-        MaskRule(pattern=r"\d+", strategy=KeepStrategy(), priotiy=1)
 
 
 # ----------------------------------------------------------------------
@@ -357,33 +173,6 @@ def test_mask_text_custom_formatted_rule() -> None:
     assert masker.mask_text("联系 13812345678") == "联系 138****5678"
 
 
-def test_mask_rule_with_strategy_returns_new_rule() -> None:
-    """with_strategy 派生新规则：仅换策略，pattern 与优先级不变。"""
-    derived = PHONE_RULE.with_strategy(PHONE_MASK)
-    assert isinstance(derived, MaskRule)
-    assert derived is not PHONE_RULE
-    assert derived.pattern == PHONE_RULE.pattern
-    assert derived.priority == PHONE_RULE.priority
-    assert derived.strategy is PHONE_MASK
-
-
-def test_mask_rule_with_strategy_keeps_original_unchanged() -> None:
-    """派生不改写原规则：原规则仍是全星策略且可正常使用。"""
-    PHONE_RULE.with_strategy(PHONE_MASK)
-    assert PHONE_RULE.strategy is not PHONE_MASK
-    masker = Masker(rules=[PHONE_RULE])
-    assert masker.mask_text("联系 13812345678") == ("联系 " + _stars("13812345678"))
-
-
-def test_mask_rule_with_strategy_overrides_priority() -> None:
-    """显式传入 priority 时派生规则使用新优先级，原规则优先级不变。"""
-    derived = ID_CARD_RULE.with_strategy(PHONE_MASK, priority=210)
-    assert derived.strategy is PHONE_MASK
-    assert derived.priority == 210
-    assert derived.pattern == ID_CARD_RULE.pattern
-    assert ID_CARD_RULE.priority == 200
-
-
 def test_mask_text_register_rule_applies_later() -> None:
     """register_rule 追加的规则在后续调用生效。"""
     masker = Masker()
@@ -481,30 +270,3 @@ def test_mask_dict_none_value_kept() -> None:
         {"phone": None},
         fields={"phone": PHONE_MASK},
     ) == {"phone": None}
-
-
-# ----------------------------------------------------------------------
-# 预置规则集
-# ----------------------------------------------------------------------
-
-
-def test_presets_composition() -> None:
-    """CN_PII_RULES 包含五条规则，均为识别+全星策略。"""
-    assert CN_PII_RULES == [
-        ID_CARD_RULE,
-        BANK_CARD_RULE,
-        PHONE_RULE,
-        EMAIL_RULE,
-        IP_RULE,
-    ]
-    for rule in CN_PII_RULES:
-        assert isinstance(rule, MaskRule)
-        assert isinstance(rule.pattern, str)
-        assert isinstance(rule.strategy, KeepStrategy)
-        assert rule.strategy.prefix == 0 and rule.strategy.suffix == 0
-
-
-def test_preset_priorities_ordering() -> None:
-    """预置规则优先级与组合顺序一致（身份证 > 银行卡 > 手机 > 邮箱 > IP）。"""
-    priorities = [rule.priority for rule in CN_PII_RULES]
-    assert priorities == sorted(priorities, reverse=True)
