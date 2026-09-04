@@ -22,3 +22,4 @@ data/
 .jbeval/
 .codegraph/
 .pytest_cache/
+.temp/
