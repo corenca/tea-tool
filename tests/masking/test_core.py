@@ -87,6 +87,80 @@ def test_mask_text_masks_ip(cn_masker: Masker) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "ip",
+    [
+        # 常见全局单播地址。
+        "2001:db8::1",
+        # 大写十六进制（IPv6 匹配大小写不敏感）。
+        "2001:DB8::1",
+        # 回环地址。
+        "::1",
+        # 链路本地地址。
+        "fe80::1",
+    ],
+)
+def test_mask_text_masks_ipv6(cn_masker: Masker, ip: str) -> None:
+    """预置 IPv6 地址命中并整段掩码。"""
+    assert cn_masker.mask_text("地址 " + ip + " 在线") == (
+        "地址 " + _stars(ip) + " 在线"
+    )
+
+
+def test_mask_text_masks_telephone(cn_masker: Masker) -> None:
+    """固话规则命中区号分隔与无分隔两种形态并整段掩码。"""
+    assert cn_masker.mask_text("固话 010-12345678 与 02112345678 均可") == (
+        "固话 " + _stars("010-12345678") + " 与 " + _stars("02112345678") + " 均可"
+    )
+
+
+def test_mask_text_masks_400_phone(cn_masker: Masker) -> None:
+    """400 号码命中并整段掩码。"""
+    assert cn_masker.mask_text("热线 400-123-4567") == (
+        "热线 " + _stars("400-123-4567")
+    )
+
+
+@pytest.mark.parametrize(
+    ("prefix", "id_card", "suffix"),
+    [
+        # 15 位老身份证。
+        ("证件 ", "110105490101001", " 留档"),
+        # 省份码 13 开头：前 11 位形似手机号，身份证按高优先级整段胜出。
+        ("证件 ", "132201780101001", " 留档"),
+    ],
+)
+def test_mask_text_masks_15_digit_id_card(
+    cn_masker: Masker, prefix: str, id_card: str, suffix: str
+) -> None:
+    """15 位老身份证整段掩码，不被手机号/银行卡规则拆出子串。"""
+    assert cn_masker.mask_text(prefix + id_card + suffix) == (
+        prefix + _stars(id_card) + suffix
+    )
+
+
+def test_mask_text_masks_email_max_length_label(cn_masker: Masker) -> None:
+    """域名 label 恰为 63 字符上限时仍命中邮箱规则。"""
+    email = "a@" + "b" * 63 + ".cn"
+    assert cn_masker.mask_text("邮箱 " + email) == "邮箱 " + _stars(email)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 域名首 label 以连字符开头。
+        "邮箱 a@-b.cn 收件",
+        # 域名 label 以连字符结尾。
+        "邮箱 a@b-.cn 收件",
+        # 域名 label 超过 63 字符上限。
+        "邮箱 a@" + "b" * 64 + ".cn 收件",
+    ],
+)
+def test_mask_text_email_invalid_label_unchanged(cn_masker: Masker, text: str) -> None:
+    """域名 label 不合规（首尾连字符、超 63 字符）时不命中邮箱规则。"""
+    assert cn_masker.mask_text(text) == text
+
+
 def test_mask_text_id_card_wins_over_bank_card(cn_masker: Masker) -> None:
     """纯数字 18 位身份证同时命中银行规则，优先级使身份证整段掩码。"""
     id_card = "110105194912310021"
